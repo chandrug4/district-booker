@@ -1,9 +1,14 @@
 {
   "notified": {
     "2026-07-31|Jana Nayagan|Tamil|10:20 AM": "2026-07-30T16:01:53.056Z",
-    "2026-07-31|Jana Nayagan|Tamil|02:10 PM": "2026-07-30T16:07:53.451Z"
+    "2026-07-31|Jana Nayagan|Tamil|02:10 PM": "2026-07-30T16:07:53.451Z",
+    "2026-08-01|Jana Nayagan|Tamil|02:10 PM": "2026-07-30T16:29:05.734Z",
+    "2026-08-01|Jana Nayagan|Tamil|02:25 PM": "2026-07-30T16:29:05.734Z",
+    "2026-08-02|Jana Nayagan|Tamil|10:20 AM": "2026-07-30T16:29:51.212Z",
+    "2026-08-02|Jana Nayagan|Tamil|02:10 PM": "2026-07-30T16:29:51.212Z",
+    "2026-08-02|Jana Nayagan|Tamil|02:25 PM": "2026-07-30T16:29:51.212Z"
   },
   "consecutiveBlocks": 0,
   "blockAlertSent": false,
-  "lastRun": "2026-07-30T16:07:54.566Z"
+  "lastRun": "2026-07-30T16:29:51.936Z"
 }
