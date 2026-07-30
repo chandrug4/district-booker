@@ -1,1 +1,8 @@
-{"notified":{},"consecutiveBlocks":0}
+{
+  "notified": {
+    "2026-07-31|Jana Nayagan|Tamil|10:20 AM": "2026-07-30T16:01:53.056Z"
+  },
+  "consecutiveBlocks": 0,
+  "blockAlertSent": false,
+  "lastRun": "2026-07-30T16:01:53.427Z"
+}
