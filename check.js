@@ -119,10 +119,11 @@ async function holdSeats(browser, seatUrl, numTickets, preferredArea, token, gue
     // STEP 2: Select ADJACENT available seats
     let seatsClicked = 0;
     if (targetSeats && targetSeats.length >= numTickets) {
-      const label = targetSeats.map(s => `${s.phyRowId}${s.seatNumber}`).join(', ');
+      const label = targetSeats.map(s => `${s.phyRowId}${s.displaySeatNumber || s.seatNumber}`).join(', ');
       console.log(`   [Auto-Hold UI] Target adjacent seats: ${label}`);
       for (const s of targetSeats) {
-        const seatLoc = page.locator(`span[aria-label*="available"][aria-label*="row ${s.phyRowId}, column ${s.seatNumber}"]`).first();
+        const num = s.displaySeatNumber || s.seatNumber;
+        const seatLoc = page.locator(`span[aria-label*="available"][aria-label*="row ${s.phyRowId}"][aria-label*="${num}"]`).first();
         if (await seatLoc.isVisible().catch(() => false)) {
           await seatLoc.click();
           seatsClicked++;
