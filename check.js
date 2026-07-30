@@ -203,6 +203,7 @@ async function checkDate(date) {
       for (let bi = 0; bi < bookable.length; bi++) {
         const block = bookable[bi];
         let seatUrl = block.directHref;
+        seatApiBody = null; // reset BEFORE click/navigation so we don't miss the API call
         if (!seatUrl) {
           await page.evaluate(idx => {
             const lis = [...document.querySelectorAll('li[class*="timeblock"][role="button"]')];
@@ -211,7 +212,6 @@ async function checkDate(date) {
           try { await page.waitForURL('**/seat-layout/**', { timeout: 8000 }); seatUrl = page.url(); }
           catch { console.log('   ' + block.timeText + ' - no nav, skip'); await page.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); await page.waitForTimeout(rand(1000,1500)); continue; }
         }
-        seatApiBody = null;
         console.log('\n   [' + (bi+1) + '/' + bookable.length + '] ' + block.timeText + ' -> ' + seatUrl.substring(0,80));
         if (page.url() !== seatUrl) {
           try { await page.goto(seatUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); } catch (e) { console.log('   nav error: ' + e.message); }
