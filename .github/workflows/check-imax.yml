@@ -1,5 +1,5 @@
-# Watches BookMyShow for IMAX seats opening on the watched weekday (Mondays by
-# default - set the WATCH_WEEKDAY input to change it).
+# PVR Pondicherry — District seat availability checker
+# Watches for your movie to open at PVR Pondicherry and emails you.
 name: Check PVR Pondicherry Availability
 
 on:
