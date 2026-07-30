@@ -321,8 +321,7 @@ async function checkDate(date) {
           if (parentMovieDiv) {
             const textLines = parentMovieDiv.innerText.split('\n').map(l => l.trim()).filter(Boolean);
             if (textLines.length > 0) movieTitle = textLines[0];
-            const langMatch = parentMovieDiv.innerText.match(/(Tamil|Hindi|English|Telugu|Malayalam|Kannada)/i);
-            if (langMatch) movieLang = langMatch[1];
+            movieLang = parentMovieDiv.innerText;
           }
 
           return { idx, timeText: (timeText||'').trim().substring(0,10), noTicket, directHref: anchor?.href || '', movieTitle, movieLang };
