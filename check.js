@@ -431,6 +431,7 @@ async function main() {
   console.log('Language  : ' + (WATCH_LANGUAGE || 'any'));
   console.log('Tickets   : ' + NUM_TICKETS + ' | Category: ' + (PREFERRED_AREA || 'any'));
   console.log('Auto-book : ' + (DISTRICT_TOKEN ? 'YES (token set)' : 'NO - notify only'));
+  let activeHoldDone = false;
   for (const date of watchDates) {
     const result = await checkDate(date);
     if (!result.ok) {
@@ -447,7 +448,6 @@ async function main() {
     if (state.consecutiveBlocks > 0) console.log('\\nRecovered - page readable again.');
     state.consecutiveBlocks = 0; state.blockAlertSent = false;
     let digestShows = [];
-    let activeHoldDone = false;
     
     for (const r of result.shows) {
       const { show, seatUrl, analysis, hasEnough, guestToken, tempTransId, product_id } = r;
