@@ -107,8 +107,8 @@ function parseSessions(cinemaApiBody, date) {
     };
     walk(data);
     return sessions;
-  } catch { return []; }
 }
+function parseShows(text, date) {
   const shows = [];
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   const timeRe = /^(\d{1,2}:\d{2}\s*[AP]M)$/i;
