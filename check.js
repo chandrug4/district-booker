@@ -433,8 +433,8 @@ async function main() {
     }
     if (state.consecutiveBlocks > 0) console.log('\\nRecovered - page readable again.');
     state.consecutiveBlocks = 0; state.blockAlertSent = false;
-    
     let digestShows = [];
+    let activeHoldDone = false;
     
     for (const r of result.shows) {
       const { show, seatUrl, analysis, hasEnough, guestToken, tempTransId, product_id } = r;
@@ -447,18 +447,22 @@ async function main() {
       if (state.notified[key]) { console.log(show.time + ' - already notified'); continue; }
       
       const dateLabel = new Date(date + 'T00:00:00Z').toLocaleDateString('en-IN', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-      const areaLines = analysis.areas.map(a => '  ' + (a.areaDesc||a.areaCode) + ' (Rs.' + a.areaPrice + '): ' + a.available + ' seats free / ' + a.total + ' total').join('\\n');
+      const areaLines = analysis.areas.map(a => '  ' + (a.areaDesc||a.areaCode) + ' (Rs.' + a.areaPrice + '): ' + a.available + ' seats free / ' + a.total + ' total').join('\n');
       const sg = analysis.suggestion;
-      const suggestLine = sg ? '\\nBest ' + NUM_TICKETS + ' seats: ' + sg.label + (sg.hasBest ? ' (Best Seats)' : '') + ' - Rs.' + sg.total : '';
+      const suggestLine = sg ? '\nBest ' + NUM_TICKETS + ' seats: ' + sg.label + (sg.hasBest ? ' (Best Seats)' : '') + ' - Rs.' + sg.total : '';
       let paymentUrl = null;
-      if (DISTRICT_TOKEN) {
+      if (DISTRICT_TOKEN && !activeHoldDone) {
         console.log('\n[Auto-Hold UI] Attempting Playwright UI seat reservation for ' + show.time + '...');
         const holdProfile = buildProfile(FINGERPRINT_SEED + '#hold#' + show.time);
         const hb = await launchBrowser(holdProfile);
         paymentUrl = await holdSeats(hb, seatUrl, NUM_TICKETS, PREFERRED_AREA, DISTRICT_TOKEN, guestToken, sg?.seats || []);
         await hb.close().catch(() => {});
-        if (paymentUrl) console.log('   payment URL: ' + paymentUrl);
-        else console.log('   auto-hold failed - notify-only email');
+        if (paymentUrl) {
+          console.log('   payment URL: ' + paymentUrl);
+          activeHoldDone = true;
+        } else console.log('   auto-hold failed - notify-only email');
+      } else if (DISTRICT_TOKEN && activeHoldDone) {
+        console.log('   (Skipping auto-hold for ' + show.time + ' to protect existing active transaction)');
       }
       
       state.notified[key] = new Date().toISOString();
