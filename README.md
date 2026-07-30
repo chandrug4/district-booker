@@ -1,259 +1,110 @@
-# BookMyShow IMAX Availability Checker
+# PVR Pondicherry — District Seat Checker
 
-I built this to avoid repeatedly refreshing BookMyShow while waiting for tickets
-to open. It watches a chosen movie, city, and format page, then emails me when
-one of the dates I care about becomes bookable.
+Checks seat availability at **PVR Providence Mall, Pondicherry** via District app and emails you when your movie opens for booking.
 
-It is a notification tool only. It does not log in, reserve seats, add anything
-to a cart, or complete a booking.
+## Features
+- Watches any movie at PVR Pondicherry (by name + language)
+- Shows available seats per category (Elite / Premium) with prices
+- Suggests best N consecutive seats
+- Optional: auto-holds seats and sends you a direct payment link
+- Runs every 15 minutes via GitHub Actions
 
-## How it works
+## Setup
 
-On each run, the checker opens the BookMyShow buytickets page for the event I
-configured. It reads the page's server-rendered state and checks the availability
-status of the relevant dates. By default, it watches the next two Mondays in
-India time (IST).
+### Step 1 — Fork / clone this repo
 
-When a watched date opens:
+### Step 2 — GitHub Actions permissions
+Settings → Actions → General → Workflow permissions → **Read and write permissions** → Save
 
-- it sends an EmailJS email with a direct BookMyShow link;
-- it records that alert in state.json, so the same date is not emailed again;
-- if the date later disappears, its alert is re-armed.
+### Step 3 — Set Variables
+Settings → Secrets and variables → Actions → **Variables**
 
-The workflow also detects when it cannot reliably read the page (for example, a
-Cloudflare block or a page-layout change). After three consecutive failed runs,
-it sends a separate failure email and uploads the returned HTML and screenshot
-as a GitHub Actions artifact.
+| Variable | Example | Description |
+|---|---|---|
+| `CINEMA_URL_BASE` | `https://www.district.in/movies/pvr-providence-mall-providence-mall-pondicherry-in-puducherry-CD1025204` | District cinema page URL |
+| `TARGET_MOVIE` | `Jana Nayagan` | Movie name (partial match ok) |
+| `WATCH_LANGUAGE` | `Tamil` | Language filter (Tamil / Hindi / English) |
+| `WATCH_DATES` | `2026-07-31` | Specific dates (comma-separated YYYY-MM-DD) |
+| `NUM_TICKETS` | `2` | How many tickets you want |
+| `PREFERRED_AREA` | `EL` | EL = Elite, PR = Premium |
+| `MIN_SEATS` | `2` | Alert only when this many seats free |
 
-The checker makes one BookMyShow page request per run. Please keep the cadence
-reasonable and comply with BookMyShow's terms and policies.
+### Step 4 — Set Secrets
+Settings → Secrets and variables → Actions → **Secrets**
 
-## Use your own copy
+| Secret | Where to get it |
+|---|---|
+| `TO_EMAIL` | Your email address |
+| `EMAILJS_SERVICE_ID` | EmailJS → Email Services |
+| `EMAILJS_TEMPLATE_ID` | EmailJS → Email Templates (ticket-open) |
+| `EMAILJS_FAILURE_TEMPLATE_ID` | EmailJS → Email Templates (failure) |
+| `EMAILJS_PUBLIC_KEY` | EmailJS → Account |
+| `EMAILJS_PRIVATE_KEY` | EmailJS → Account → Security |
+| `DISTRICT_ACCESS_TOKEN` | Optional — for auto seat-hold (see below) |
 
-1. Fork this repository, or clone it into a repository you control.
-2. Keep .github/workflows/check-imax.yml; it is the GitHub Actions runner.
-3. Configure EmailJS and repository settings as described below.
-4. Run the **Check IMAX Availability** workflow once manually and verify that
-   you receive the test result in the Actions log.
+### Step 5 — EmailJS Setup
+1. Sign up at **emailjs.com** (free)
+2. Email Services → Add New Service → Gmail → Connect → Send Test
+3. Email Templates → Create New Template:
+   - To Email: `{{to_email}}`
+   - Subject: `{{subject}}`
+   - Body: `{{message}}`
+   - Save → copy Template ID → this is `EMAILJS_TEMPLATE_ID`
+4. Create a second template (same format) → `EMAILJS_FAILURE_TEMPLATE_ID`
+5. Account page → copy **Public Key** → `EMAILJS_PUBLIC_KEY`
+6. Account → Security → enable API → copy **Private Key** → `EMAILJS_PRIVATE_KEY`
 
-For GitHub Actions, open **Settings → Actions → General** and allow workflows
-to have **Read and write permissions**. The workflow needs this to commit the
-updated state.json file after each run. Without it, the checker can run but
-will forget which alerts it has already sent.
+### Step 6 — Run manually
+Actions tab → **Check PVR Pondicherry Availability** → Run workflow → Run workflow
 
-## Configure the movie, city, format, and dates
+---
 
-### Find the target URL
+## Option B — Auto seat-hold (send direct payment link)
 
-Open the exact BookMyShow listing you want to watch and copy its buytickets
-URL. It must contain the correct city and event code, for example:
+Add `DISTRICT_ACCESS_TOKEN` secret:
+1. Open **district.in** in Chrome → Login to your account
+2. Open any movie → open seat layout page
+3. Press **F12** → Network tab → filter by `/gw/`
+4. Click any `/gw/consumer/movies/...` request
+5. In **Request Headers** → copy `x-access-token` value
+6. Paste as `DISTRICT_ACCESS_TOKEN` secret in GitHub
 
-~~~
-https://in.bookmyshow.com/movies/chennai/example-film/buytickets/ET01234567
-~~~
+When set, the checker will:
+- Auto-select your N best consecutive seats
+- Send you a **direct payment link** in the email
+- You just tap Pay — done!
 
-Use the URL **without a trailing date**. The event code is format-specific, so
-the 2D, IMAX, 3D, and other listings for the same film may have different URLs.
-Choose the listing for the format you actually want.
+Token expires ~30 days. Update when it stops working.
 
-### Repository variables
+---
 
-In GitHub, go to **Settings → Secrets and variables → Actions → Variables** and
-add the following values.
+## Seat Status Reference
 
-| Variable        | Required | Value |
-| --------------- | -------- | ----- |
-| TARGET_URL_BASE | Yes      | The buytickets URL found above, with no trailing date. |
-| WATCH_DATES     | No       | Specific dates to watch, comma-separated: 2026-08-15,2026-08-22. This overrides the weekday settings. |
-| WATCH_WEEKDAY   | No       | Weekday to watch, such as monday or friday. Names and 0–6 (0 is Sunday) work. Default: monday. |
-| DATES_TO_CHECK  | No       | Number of upcoming matching weekdays to watch. Default: 2. |
-| STOP            | No       | A non-empty value pauses every run. Delete the variable to resume; STOP=0 also pauses it. |
+| Status in API | Meaning |
+|---|---|
+| `"0"` | ✅ Available |
+| `"0"` + bestSeat | ✅ Available (Best Seat — blue) |
+| `"1"` | ❌ Booked/Taken |
+| `"1000"` | ♿ Wheelchair companion |
+| `"1001"` | ♿ Wheelchair seat |
 
-Use either WATCH_DATES or the weekday settings:
+---
 
-~~~
-# Watch the next two Fridays
-WATCH_WEEKDAY=friday
-DATES_TO_CHECK=2
+## Schedule
 
-# Or watch only these exact dates
-WATCH_DATES=2026-08-15,2026-08-22
-~~~
+Runs every 15 minutes at :02, :17, :32, :47 automatically once pushed.
 
-BookMyShow generally exposes only a short booking window. A future date may
-correctly show as unavailable until it enters that window.
+To pause: add variable `STOP` = `1`
+To resume: delete the `STOP` variable
 
-## Configure email alerts with EmailJS
+---
 
-EmailJS delivers both the ticket-open alert and the checker-failure alert.
+## Local Testing
 
-1. Create an account at [EmailJS](https://www.emailjs.com/).
-2. Open **Email Services**, connect an email provider, and send its test email.
-3. In **Email Templates**, create two templates:
-   - a ticket-open template;
-   - a failure-warning template.
-4. In both templates set:
-   - **To Email** to {{to_email}};
-   - subject to {{subject}};
-   - message/body to {{message}}.
-5. On **Account → Security**, enable non-browser/API use and create or reveal a
-   private key. This project runs from Node.js on GitHub, not from a browser.
-
-EmailJS provides the values in its dashboard:
-
-| Value needed | Where to get it |
-| ------------ | --------------- |
-| Service ID   | Open **Email Services** and select the connected service. |
-| Template IDs | Open **Email Templates** and select each template. |
-| Public key   | **Account** page. |
-| Private key  | **Account → Security** after enabling private-key/API access. |
-
-The send request needs the service ID, template ID, public key, and template
-parameters; this is the EmailJS REST API contract. See the [EmailJS send API](https://www.emailjs.com/docs/rest-api/send/)
-and [EmailJS template guide](https://www.emailjs.com/docs/user-guide/creating-email-templates/)
-if the dashboard changes.
-
-### Repository secrets
-
-In GitHub, open **Settings → Secrets and variables → Actions → Secrets** and
-create these secrets. Do not commit any of them to .env, state.json, or the
-repository.
-
-| Secret                      | Required                | What to store |
-| --------------------------- | ----------------------- | ------------- |
-| TO_EMAIL                    | Yes                     | The email address that should receive alerts. |
-| EMAILJS_SERVICE_ID          | Yes                     | EmailJS service ID. |
-| EMAILJS_TEMPLATE_ID         | Yes                     | Ticket-open template ID. |
-| EMAILJS_FAILURE_TEMPLATE_ID | Yes, for failure emails | Failure-warning template ID. |
-| EMAILJS_PUBLIC_KEY          | Yes                     | EmailJS public key. |
-| EMAILJS_PRIVATE_KEY         | Yes                     | EmailJS private key. Keep this private. |
-| PROXY_URL                   | No                      | A residential proxy URL, such as http://user:password@host:port, only if BookMyShow blocks the runner IP. |
-
-TO_EMAIL is not a credential, but I still store it as a secret because the
-workflow reads it from the secrets store and it avoids exposing a personal email
-address in repository settings.
-
-## Run and verify GitHub Actions
-
-Go to **Actions → Check IMAX Availability → Run workflow**. Leave the inputs
-blank to use the repository variables, or use watch_dates for a one-off test.
-
-Check that the log shows the target URL, the watched dates, and a result for
-each date. If a run cannot read the page, download its **debug-artifacts**
-artifact from the workflow run before changing anything.
-
-The included schedule triggers at :02, :17, :32, and :47 of every hour. Runs
-are serialized so they cannot race while updating state.json.
-
-## If the GitHub Actions schedule is unreliable: trigger it with cron-job.org
-
-cron-job.org cannot run this Node.js project directly. Instead, it can call the
-GitHub API to start the existing workflow_dispatch workflow. GitHub then runs
-the project with the same repository variables, secrets, browser setup, and
-state handling.
-
-### 1. Prevent duplicate schedules
-
-If you are moving to cron-job.org permanently, remove or comment out only the
-schedule section in .github/workflows/check-imax.yml, while keeping
-workflow_dispatch. Commit and push that change. Do **not** disable the whole
-workflow: a disabled workflow cannot be started by the API.
-
-The trigger section should begin like this after the change:
-
-~~~yaml
-on:
-  workflow_dispatch:
-    inputs:
-      # keep the existing inputs below this line
-~~~
-
-If you leave the built-in schedule enabled, both schedulers can start runs. The
-workflow will serialize them and state prevents duplicate ticket emails, but it
-creates unnecessary requests and Actions usage.
-
-### 2. Create a narrowly scoped GitHub token
-
-In GitHub, open **Settings → Developer settings → Personal access tokens →
-Fine-grained tokens**.
-
-- Limit the token to this one repository.
-- Give it **Actions: Read and write** repository permission.
-- Set an expiry date and copy the token immediately.
-
-Store this token only in cron-job.org's request header. It is a credential: do
-not place it in the repository, GitHub variables, or the cron job URL. GitHub's
-[workflow dispatch API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)
-requires Actions: write for a fine-grained token.
-
-### 3. Create the cron-job.org HTTP job
-
-In [cron-job.org](https://cron-job.org/), create a new job with these settings.
-Replace YOUR_OWNER, YOUR_REPOSITORY, and YOUR_BRANCH with your fork's values.
-YOUR_BRANCH is usually main or master.
-
-| Field          | Value |
-| -------------- | ----- |
-| Title          | BookMyShow availability checker |
-| URL            | https://api.github.com/repos/YOUR_OWNER/YOUR_REPOSITORY/actions/workflows/check-imax.yml/dispatches |
-| Request method | POST |
-| Request body   | {"ref":"YOUR_BRANCH"} |
-| Header         | Authorization: Bearer YOUR_FINE_GRAINED_TOKEN |
-| Header         | Accept: application/vnd.github+json |
-| Header         | Content-Type: application/json |
-| Schedule       | Every 15 minutes, preferably at minutes 02, 17, 32, and 47 |
-
-Enable failure notifications in cron-job.org as an extra signal that the GitHub
-API request itself failed. A successful dispatch normally returns a no-content
-response; the actual checker result will appear in the GitHub Actions run.
-
-cron-job.org supports custom HTTP methods, headers, and request bodies. Its
-[job setup documentation](https://docs.cron-job.org/creating-cron-jobs.html)
-and [REST API reference](https://docs.cron-job.org/rest-api.html) are useful if
-its UI changes.
-
-### 4. Test the external trigger
-
-Use cron-job.org's **Run now** option, then open the repository's **Actions**
-tab. A new **Check IMAX Availability** run should appear. If cron-job.org shows
-401 or 403, recreate the GitHub token, confirm its repository selection, and
-confirm it has **Actions: Read and write** permission.
-
-## Run it locally
-
-Local runs are useful for testing configuration before committing anything:
-
-~~~bash
+```bash
 npm install
 npm run browsers
 cp .env.example .env
-# Fill in TARGET_URL_BASE and the EmailJS values in .env
-npm run check:local
-~~~
-
-.env is ignored by Git. Keep it that way.
-
-The local-only tuning values in .env.example are:
-
-| Variable              | Default | Purpose |
-| --------------------- | ------- | ------- |
-| MAX_ATTEMPTS          | 3       | Page-load attempts in a single local run. |
-| BLOCK_ALERT_THRESHOLD | 3       | Consecutive unreadable runs before a failure email. |
-| FINGERPRINT_SEED      | Random  | Replays a fingerprint printed in an earlier log for debugging. |
-
-The hosted workflow currently fixes the failure threshold at three and accepts a
-fingerprint seed only through the manual workflow input. Adding these names as
-repository variables will not change the hosted workflow.
-
-## Operational notes
-
-- state.json is intentionally committed by GitHub Actions. It holds the
-  notification history and consecutive-failure count; do not delete it unless
-  you deliberately want to reset those records.
-- Set STOP to any non-empty value to pause safely. It makes no BookMyShow
-  request and does not alter state.json.
-- If BookMyShow blocks a GitHub-hosted IP, PROXY_URL is the available
-  configuration escape hatch. It should be a legitimate proxy you are
-  authorized to use.
-- A CAPTCHA, an IP ban, or a BookMyShow page redesign can still prevent this
-  checker from working. Treat its failure email as a prompt to check manually.
+# fill in .env with your values
+node --env-file=.env check.js
+```
