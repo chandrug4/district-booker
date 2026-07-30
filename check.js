@@ -415,7 +415,8 @@ async function main() {
       let paymentUrl = null;
       if (DISTRICT_TOKEN) {
         console.log('\n[Auto-Hold UI] Attempting Playwright UI seat reservation for ' + show.time + '...');
-        const hb = await launchBrowser({ chromeVersion: '131' });
+        const holdProfile = buildProfile(FINGERPRINT_SEED + '#hold#' + show.time);
+        const hb = await launchBrowser(holdProfile);
         paymentUrl = await holdSeats(hb, seatUrl, NUM_TICKETS, PREFERRED_AREA, DISTRICT_TOKEN, guestToken);
         await hb.close().catch(() => {});
         if (paymentUrl) console.log('   payment URL obtained!');
