@@ -174,70 +174,68 @@ async function checkDate(date) {
         if (attempt < MAX_ATTEMPTS) { await new Promise(r => setTimeout(r, rand(8000, 20000) * attempt)); continue; }
         return { ok: false, reason: 'blocked HTTP ' + status };
       }
+
       console.log('   listing loaded (' + status + ', ' + html.length + ' B)');
 
-      // ── Get seat-layout links AND parse page text for show info ──────────
-      const seatLinks = await page.evaluate(() =>
-        [...document.querySelectorAll('a[href*="seat-layout"]')].map(a => a.href)
-      );
-      const pageText = await page.innerText('body').catch(() => '');
-      console.log('   seat-layout links: ' + seatLinks.length);
-
-      const textShows = parseShows(pageText, date);
-      console.log('   shows from page text: ' + textShows.length);
-
-      const matching = textShows.filter(s => {
-        const mMatch = !TARGET_MOVIE   || s.movie.toLowerCase().includes(TARGET_MOVIE.toLowerCase());
-        const lMatch  = !WATCH_LANGUAGE || s.language.toLowerCase().includes(WATCH_LANGUAGE);
-        return mMatch && lMatch;
+      // District uses JS router — most shows don't have <a href>, only role=button li elements.
+      // We click each bookable show and capture the navigation URL.
+      const showBlocks = await page.evaluate(() => {
+        const lis = [...document.querySelectorAll('li[class*="timeblock"][role="button"]')];
+        return lis.map((li, idx) => {
+          const anchor = li.querySelector('a');
+          const timeDiv = li.querySelector('[class*="__time"]');
+          const timeText = (timeDiv ? timeDiv.firstChild?.textContent?.trim() : '') || li.textContent?.trim().substring(0,8);
+          const noTicket = li.textContent?.includes('No tickets');
+          return { idx, timeText: (timeText||'').trim().substring(0,10), noTicket, directHref: anchor?.href || '' };
+        }).filter(s => /\d{1,2}:\d{2}/.test(s.timeText || ''));
       });
-      console.log('   matching (movie="' + TARGET_MOVIE + '" lang="' + WATCH_LANGUAGE + '"): ' + matching.length);
 
-      // Use seat links — one per show time in order they appear on page
-      if (seatLinks.length === 0) { await browser.close(); return { ok: true, shows: [], date }; }
+      console.log('   show blocks: ' + showBlocks.length);
+      const bookable = showBlocks.filter(s => !s.noTicket);
+      console.log('   bookable: ' + bookable.length);
 
-      // ── For each seat link, open seat layout + check availability ─────────
+      if (bookable.length === 0) { await browser.close(); return { ok: true, shows: [], date }; }
+
       const results = [];
-      for (let li = 0; li < seatLinks.length; li++) {
-        const seatUrl = seatLinks[li];
-        // Match show info by index if available, else unknown
-        const show = matching[li] || { movie: TARGET_MOVIE, language: WATCH_LANGUAGE || 'Tamil', time: '?', date };
+      for (let bi = 0; bi < bookable.length; bi++) {
+        const block = bookable[bi];
+        let seatUrl = block.directHref;
+        if (!seatUrl) {
+          await page.evaluate(idx => {
+            const lis = [...document.querySelectorAll('li[class*="timeblock"][role="button"]')];
+            if (lis[idx]) lis[idx].click();
+          }, block.idx);
+          try { await page.waitForURL('**/seat-layout/**', { timeout: 8000 }); seatUrl = page.url(); }
+          catch { console.log('   ' + block.timeText + ' - no nav, skip'); await page.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); await page.waitForTimeout(rand(1000,1500)); continue; }
+        }
         seatApiBody = null;
-        console.log('\n   [' + (li+1) + '/' + seatLinks.length + '] ' + show.movie + ' | ' + show.language + ' | ' + show.time);
-
-        try { await page.goto(seatUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); await page.waitForTimeout(rand(3000, 5000)); }
-        catch (e) { console.log('   seat page error: ' + e.message); continue; }
-
-        // Also try cinema API from seat page
-        if (cinemaApiBody) {
-          const sessions = parseSessions(cinemaApiBody, date);
-          console.log('   sessions from cinema API: ' + sessions.length);
-          if (sessions.length > 0 && li < sessions.length) {
-            const sess = sessions[li];
-            show.movie    = sess.movie    || show.movie;
-            show.language = sess.language || show.language;
-            show.time     = sess.time     || show.time;
+        console.log('\n   [' + (bi+1) + '/' + bookable.length + '] ' + block.timeText + ' -> ' + seatUrl.substring(0,80));
+        if (page.url() !== seatUrl) {
+          try { await page.goto(seatUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); } catch (e) { console.log('   nav error: ' + e.message); }
+        }
+        await page.waitForTimeout(rand(3000, 5000));
+        const seatText = await page.innerText('body').catch(() => '');
+        const langM = seatText.match(/(Tamil|Hindi|English|Telugu|Malayalam)/i);
+        const movieM = seatText.match(/^([^\n]+)\n\d+ \w+,/m);
+        const show = { movie: movieM ? movieM[1].trim() : TARGET_MOVIE, language: langM ? langM[1] : (WATCH_LANGUAGE||'Tamil'), time: block.timeText, date };
+        const mOk = !TARGET_MOVIE   || show.movie.toLowerCase().includes(TARGET_MOVIE.toLowerCase());
+        const lOk = !WATCH_LANGUAGE || show.language.toLowerCase().includes(WATCH_LANGUAGE);
+        if (!mOk || !lOk) { console.log('   skip - ' + show.movie + '/' + show.language); await page.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); await page.waitForTimeout(rand(1000,1500)); continue; }
+        if (!seatApiBody) { console.log('   select-seat not captured'); }
+        else {
+          const sd = parseSeatApiBody(seatApiBody);
+          if (sd) {
+            const analysis = analyseSeatLayout(sd, NUM_TICKETS, PREFERRED_AREA||null);
+            if (analysis.ok) {
+              for (const area of analysis.areas) console.log('   ' + area.areaCode + ' Rs.' + area.areaPrice + ': ' + area.available + ' free / ' + area.total + ' total');
+              const pa = analysis.areas.find(a => !PREFERRED_AREA || a.areaCode === PREFERRED_AREA);
+              results.push({ show, seatUrl, analysis, hasEnough: pa ? pa.available >= MIN_SEATS : false, guestToken, tempTransId: analysis.tempTransId, product_id: analysis.product_id });
+            }
           }
         }
-
-        if (!seatApiBody) { console.log('   select-seat API not captured'); continue; }
-        const seatData = parseSeatApiBody(seatApiBody);
-        if (!seatData) { console.log('   could not parse seat data'); continue; }
-        const analysis = analyseSeatLayout(seatData, NUM_TICKETS, PREFERRED_AREA || null);
-        if (!analysis.ok) { console.log('   analysis error: ' + analysis.reason); continue; }
-        for (const area of analysis.areas) console.log('   ' + area.areaCode + ' Rs.' + area.areaPrice + ': ' + area.available + ' free / ' + area.total + ' total');
-
-        // Filter by movie/language using what we know
-        const movieOk = !TARGET_MOVIE   || show.movie.toLowerCase().includes(TARGET_MOVIE.toLowerCase());
-        const langOk  = !WATCH_LANGUAGE || show.language.toLowerCase().includes(WATCH_LANGUAGE);
-        if (!movieOk || !langOk) { console.log('   skipped (movie/lang mismatch)'); continue; }
-
-        const prefArea = analysis.areas.find(a => !PREFERRED_AREA || a.areaCode === PREFERRED_AREA);
-        const hasEnough = prefArea ? prefArea.available >= MIN_SEATS : false;
-        results.push({ show, seatUrl, analysis, hasEnough, guestToken, tempTransId: analysis.tempTransId, product_id: analysis.product_id });
-
-        if (li < seatLinks.length - 1) { await page.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); await page.waitForTimeout(rand(1500, 2500)); }
+        if (bi < bookable.length - 1) { await page.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); await page.waitForTimeout(rand(1500, 2000)); }
       }
+
       await browser.close();
       return { ok: true, shows: results, date };
     } catch (e) {
