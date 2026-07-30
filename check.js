@@ -336,7 +336,10 @@ async function checkDate(date) {
       const validShows = showBlocks.filter(s => {
         if (s.noTicket) return false;
         if (TARGET_MOVIE && !s.movieTitle.toLowerCase().includes(TARGET_MOVIE.toLowerCase())) return false;
-        if (WATCH_LANGUAGE && !s.movieLang.toLowerCase().includes(WATCH_LANGUAGE.toLowerCase())) return false;
+        if (WATCH_LANGUAGE) {
+          const reqLangs = WATCH_LANGUAGE.split(',').map(l => l.trim().toLowerCase()).filter(Boolean);
+          if (!reqLangs.some(l => s.movieLang.toLowerCase().includes(l))) return false;
+        }
         if (startMin !== null || endMin !== null) {
           const showMin = parseConfigTime(s.timeText);
           if (showMin !== null) {
