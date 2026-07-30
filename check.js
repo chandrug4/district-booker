@@ -81,7 +81,7 @@ async function holdSeats(page, tempTransId, product_id, seats, guestToken) {
   if (!DISTRICT_TOKEN) return null;
   try {
     const result = await page.evaluate(async ({ transId, pid, seats, token, guest }) => {
-      const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json, text/plain, */*', 'x-app-type': 'ed_web', 'x-client-id': 'district-web', 'x-app-version': '11.11.1', 'x-access-token': token };
+      const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json, text/plain, */*', 'x-app-type': 'ed_web', 'x-client-id': 'district-web', 'x-app-version': '11.11.1', 'x-access-token': token, 'Cookie': 'x-access-token=' + token };
       if (guest) headers['x-guest-token'] = guest;
       const res = await fetch('https://www.district.in/gw/consumer/movies/v1/checkout?version=3&site_id=1&channel=web&child_site_id=1&platform=district',
         { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ tempTransId: transId, product_id: pid, seats }) });
@@ -367,6 +367,7 @@ async function main() {
         console.log('\\nAuto-hold: ' + sg.label + '...');
         const hb = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
         const hc = await hb.newContext({ userAgent: windowsUserAgent('131') });
+        await hc.addCookies([{ name: 'x-access-token', value: DISTRICT_TOKEN, domain: '.district.in', path: '/' }]);
         const hp = await hc.newPage();
         await hp.goto(seatUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
         await hp.waitForTimeout(3000);
