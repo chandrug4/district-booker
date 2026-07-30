@@ -59,8 +59,20 @@ function nextWeekdays(weekday, count) {
 
 function getWatchDates() {
   if (WATCH_DATES) return WATCH_DATES.split(',').map(s => s.trim()).filter(Boolean);
-  const wi = WEEKDAY_NAMES.findIndex(n => n.startsWith(WATCH_WEEKDAY));
-  return nextWeekdays(wi === -1 ? 5 : wi, DATES_TO_CHECK);
+  
+  let weekdaysStr = WATCH_WEEKDAY;
+  if (weekdaysStr === 'weekend') weekdaysStr = 'saturday, sunday';
+  
+  const requestedDays = weekdaysStr.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  const dates = [];
+  
+  for (const dayStr of requestedDays) {
+    const wi = WEEKDAY_NAMES.findIndex(n => n.startsWith(dayStr));
+    if (wi !== -1) {
+      dates.push(...nextWeekdays(wi, DATES_TO_CHECK));
+    }
+  }
+  return dates.length ? [...new Set(dates)].sort() : nextWeekdays(5, DATES_TO_CHECK);
 }
 
 async function sendEmail(templateId, subject, message) {
