@@ -77,7 +77,7 @@ async function launchBrowser(profile) {
   catch  { const b = await chromium.launch(opts); console.log('   Chromium ' + b.version()); return b; }
 }
 
-async function holdSeats(browser, seatUrl, numTickets, preferredArea, token, guestToken) {
+async function holdSeats(browser, seatUrl, numTickets, preferredArea, token, guestToken, targetSeats = []) {
   const cookieStr = process.env.DISTRICT_COOKIES || process.env.DISTRICT_ACCESS_TOKEN || '';
   if (!cookieStr) return null;
   try {
@@ -88,7 +88,6 @@ async function holdSeats(browser, seatUrl, numTickets, preferredArea, token, gue
       permissions: ['geolocation']
     });
 
-    // Parse cookies from DISTRICT_COOKIES string or use token fallback
     const cookiesToAdd = [];
     if (cookieStr.includes('=')) {
       const parts = cookieStr.split(';');
@@ -117,18 +116,38 @@ async function holdSeats(browser, seatUrl, numTickets, preferredArea, token, gue
       await page.waitForTimeout(1000);
     }
 
-    // STEP 2: Select available seats
-    const areaFilter = preferredArea ? `[aria-label*="${preferredArea}"]` : '';
-    const selector = `span[aria-label*="available"][aria-label*="seat"]:not([aria-label*="unavailable"])${areaFilter}`;
-    const availableSeats = page.locator(selector);
-    const count = await availableSeats.count();
-
-    if (count >= numTickets) {
-      console.log(`   [Auto-Hold UI] Selecting ${numTickets} seats...`);
-      for (let i = 0; i < numTickets; i++) {
-        await availableSeats.nth(i).click();
-        await page.waitForTimeout(400);
+    // STEP 2: Select ADJACENT available seats
+    let seatsClicked = 0;
+    if (targetSeats && targetSeats.length >= numTickets) {
+      const label = targetSeats.map(s => `${s.phyRowId}${s.seatNumber}`).join(', ');
+      console.log(`   [Auto-Hold UI] Target adjacent seats: ${label}`);
+      for (const s of targetSeats) {
+        const seatLoc = page.locator(`span[aria-label*="available"][aria-label*="row ${s.phyRowId}, column ${s.seatNumber}"]`).first();
+        if (await seatLoc.isVisible().catch(() => false)) {
+          await seatLoc.click();
+          seatsClicked++;
+          await page.waitForTimeout(400);
+        }
       }
+    }
+
+    // Fallback if targetSeats locator didn't hit
+    if (seatsClicked < numTickets) {
+      console.log(`   [Auto-Hold UI] Falling back to sequential available seats...`);
+      const areaFilter = preferredArea ? `[aria-label*="${preferredArea}"]` : '';
+      const selector = `span[aria-label*="available"][aria-label*="seat"]:not([aria-label*="unavailable"])${areaFilter}`;
+      const availableSeats = page.locator(selector);
+      const count = await availableSeats.count();
+      if (count >= numTickets) {
+        for (let i = 0; i < numTickets; i++) {
+          await availableSeats.nth(i).click();
+          await page.waitForTimeout(400);
+        }
+        seatsClicked = numTickets;
+      }
+    }
+
+    if (seatsClicked >= numTickets) {
       await page.waitForTimeout(1500);
 
       // STEP 3: Click Proceed button
@@ -436,7 +455,7 @@ async function main() {
         console.log('\n[Auto-Hold UI] Attempting Playwright UI seat reservation for ' + show.time + '...');
         const holdProfile = buildProfile(FINGERPRINT_SEED + '#hold#' + show.time);
         const hb = await launchBrowser(holdProfile);
-        paymentUrl = await holdSeats(hb, seatUrl, NUM_TICKETS, PREFERRED_AREA, DISTRICT_TOKEN, guestToken);
+        paymentUrl = await holdSeats(hb, seatUrl, NUM_TICKETS, PREFERRED_AREA, DISTRICT_TOKEN, guestToken, sg?.seats || []);
         await hb.close().catch(() => {});
         if (paymentUrl) console.log('   payment URL: ' + paymentUrl);
         else console.log('   auto-hold failed - notify-only email');
