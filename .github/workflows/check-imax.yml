@@ -1,6 +1,6 @@
 # Watches BookMyShow for IMAX seats opening on the watched weekday (Mondays by
 # default - set the WATCH_WEEKDAY input to change it).
-name: Check IMAX Availability
+name: Check PVR Pondicherry Availability
 
 on:
   schedule:
@@ -88,28 +88,26 @@ jobs:
 
       - name: Check availability
         env:
-          TARGET_URL_BASE: ${{ vars.TARGET_URL_BASE }}
-          # Scheduled runs have no inputs, so they fall through to the repo
-          # variables (Settings -> Secrets and variables -> Actions -> Variables).
-          # Retarget the checker by editing those - no code change, no push.
-          STOP: ${{ vars.STOP }}
-          WATCH_DATES: ${{ github.event.inputs.watch_dates || vars.WATCH_DATES }}
-          WATCH_WEEKDAY: ${{ github.event.inputs.weekday || vars.WATCH_WEEKDAY }}
-          DATES_TO_CHECK: ${{ github.event.inputs.dates || vars.DATES_TO_CHECK }}
+          CINEMA_URL_BASE: ${{ vars.CINEMA_URL_BASE }}
+          TARGET_MOVIE:    ${{ vars.TARGET_MOVIE }}
+          WATCH_LANGUAGE:  ${{ vars.WATCH_LANGUAGE }}
+          NUM_TICKETS:     ${{ vars.NUM_TICKETS }}
+          PREFERRED_AREA:  ${{ vars.PREFERRED_AREA }}
+          MIN_SEATS:       ${{ vars.MIN_SEATS }}
+          STOP:            ${{ vars.STOP }}
+          WATCH_DATES:     ${{ github.event.inputs.watch_dates || vars.WATCH_DATES }}
+          WATCH_WEEKDAY:   ${{ github.event.inputs.weekday    || vars.WATCH_WEEKDAY }}
+          DATES_TO_CHECK:  ${{ github.event.inputs.dates      || vars.DATES_TO_CHECK }}
           BLOCK_ALERT_THRESHOLD: '3'
-          # Blank falls back to GITHUB_RUN_ID + attempt, so each hourly run
-          # presents a different machine. Set it to a seed printed in an earlier
-          # log to reproduce that run's exact fingerprint.
           FINGERPRINT_SEED: ${{ github.event.inputs.fingerprint_seed }}
-          TO_EMAIL: ${{ secrets.TO_EMAIL }}
-          EMAILJS_SERVICE_ID: ${{ secrets.EMAILJS_SERVICE_ID }}
-          EMAILJS_TEMPLATE_ID: ${{ secrets.EMAILJS_TEMPLATE_ID }}
-          # Separate template for "checker is blocked" mail.
+          TO_EMAIL:                    ${{ secrets.TO_EMAIL }}
+          EMAILJS_SERVICE_ID:          ${{ secrets.EMAILJS_SERVICE_ID }}
+          EMAILJS_TEMPLATE_ID:         ${{ secrets.EMAILJS_TEMPLATE_ID }}
           EMAILJS_FAILURE_TEMPLATE_ID: ${{ secrets.EMAILJS_FAILURE_TEMPLATE_ID }}
-          EMAILJS_PUBLIC_KEY: ${{ secrets.EMAILJS_PUBLIC_KEY }}
-          EMAILJS_PRIVATE_KEY: ${{ secrets.EMAILJS_PRIVATE_KEY }}
-          # Optional residential proxy - the real fix if GitHub's IPs get banned.
-          PROXY_URL: ${{ secrets.PROXY_URL }}
+          EMAILJS_PUBLIC_KEY:          ${{ secrets.EMAILJS_PUBLIC_KEY }}
+          EMAILJS_PRIVATE_KEY:         ${{ secrets.EMAILJS_PRIVATE_KEY }}
+          PROXY_URL:             ${{ secrets.PROXY_URL }}
+          DISTRICT_ACCESS_TOKEN: ${{ secrets.DISTRICT_ACCESS_TOKEN }}
         run: node check.js
 
       # Screenshot + HTML of whatever BookMyShow returned when it blocked us.
