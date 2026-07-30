@@ -153,12 +153,14 @@ async function checkDate(date) {
     let cinemaApiBody = null;
 
     await ctx.route('**/*', async route => {
-      const req = route.request();
-      const resp = await route.fetch();
-      let body = ''; try { body = await resp.text(); } catch {}
-      if (req.url().includes('/gw/consumer/movies/v1/select-seat')) { seatApiBody = body; guestToken = req.headers()['x-guest-token'] || null; }
-      if (req.url().includes('/gw/consumer/movies/v3/cinema')) cinemaApiBody = body;
-      await route.fulfill({ response: resp, body });
+      try {
+        const req = route.request();
+        const resp = await route.fetch();
+        let body = ''; try { body = await resp.text(); } catch {}
+        if (req.url().includes('/gw/consumer/movies/v1/select-seat')) { seatApiBody = body; guestToken = req.headers()['x-guest-token'] || null; }
+        if (req.url().includes('/gw/consumer/movies/v3/cinema')) cinemaApiBody = body;
+        await route.fulfill({ response: resp, body });
+      } catch { /* request context disposed during navigation — safe to ignore */ }
     });
 
     const page = await ctx.newPage();
