@@ -80,17 +80,57 @@ async function holdSeats(page, tempTransId, product_id, seats, guestToken) {
   return null;
 }
 
-function parseShows(text, date) {
+function parseSessions(cinemaApiBody, date) {
+  // Cinema API structure varies — try multiple known shapes
+  if (!cinemaApiBody) return [];
+  try {
+    const data = JSON.parse(cinemaApiBody);
+    const sessions = [];
+    // Walk the whole response looking for objects with sessionId + showTime
+    const walk = (node, depth = 0) => {
+      if (!node || typeof node !== 'object' || depth > 15) return;
+      // A session object has sessionId/id and showTime/time
+      if ((node.sessionId || node.id) && (node.showTime || node.sTime || node.time) && node.lang) {
+        sessions.push({
+          sessionId: String(node.sessionId || node.id),
+          time:      node.showTime || node.sTime || node.time || '',
+          language:  node.lang || node.language || '',
+          frmtId:    node.frmtId || node.sessionId || node.id || '',
+          contentId: node.contentId || '',
+          movie:     node.movieName || node.name || '',
+        });
+        return;
+      }
+      for (const v of (Array.isArray(node) ? node : Object.values(node))) {
+        walk(v, depth + 1);
+      }
+    };
+    walk(data);
+    return sessions;
+  } catch { return []; }
+}
   const shows = [];
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   const timeRe = /^(\d{1,2}:\d{2}\s*[AP]M)$/i;
   const langRe  = /^(Tamil|Hindi|English|Telugu|Malayalam|Kannada)$/i;
+  // Match rating lines like: "A | Tamil", "UA13+ | Tamil, English", "UA13+", "A"
+  const ratingRe = /^(UA\d*[+]?|[UAG])(\s*\||\s*$)/i;
   let currentMovie = '', currentLang = '';
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (/^(UA\d*\+?|^U$|^A$|Adult|UA13|UA16)\s*\|/i.test(line) && i > 0) currentMovie = lines[i - 1];
+    // Rating line detected → previous line is the movie title
+    if (ratingRe.test(line) && i > 0) {
+      currentMovie = lines[i - 1];
+      // Language may be on the same line: "A | Tamil" or "UA13+ | Tamil, English"
+      const inlineMatch = line.match(/\|\s*(Tamil|Hindi|English|Telugu|Malayalam|Kannada)/i);
+      if (inlineMatch) currentLang = inlineMatch[1];
+    }
+    // Standalone language line
     if (langRe.test(line)) currentLang = line;
-    if (timeRe.test(line) && currentMovie) shows.push({ movie: currentMovie, language: currentLang || 'Tamil', time: line.trim(), date });
+    // Time line → record a show
+    if (timeRe.test(line) && currentMovie) {
+      shows.push({ movie: currentMovie, language: currentLang || 'Tamil', time: line.trim(), date });
+    }
   }
   return shows;
 }
@@ -109,13 +149,17 @@ async function checkDate(date) {
     await fixAcceptLanguage(ctx, profile);
     await ctx.addInitScript(stealthInitScript, profile);
     let seatApiBody = null, guestToken = null;
+    let cinemaApiBody = null;
+
     await ctx.route('**/*', async route => {
       const req = route.request();
       const resp = await route.fetch();
       let body = ''; try { body = await resp.text(); } catch {}
       if (req.url().includes('/gw/consumer/movies/v1/select-seat')) { seatApiBody = body; guestToken = req.headers()['x-guest-token'] || null; }
+      if (req.url().includes('/gw/consumer/movies/v3/cinema')) cinemaApiBody = body;
       await route.fulfill({ response: resp, body });
     });
+
     const page = await ctx.newPage();
     try {
       const res = await page.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -131,37 +175,68 @@ async function checkDate(date) {
         return { ok: false, reason: 'blocked HTTP ' + status };
       }
       console.log('   listing loaded (' + status + ', ' + html.length + ' B)');
-      const seatLinks = await page.evaluate(() => [...document.querySelectorAll('a[href*="seat-layout"]')].map(a => a.href));
+
+      // ── Get seat-layout links AND parse page text for show info ──────────
+      const seatLinks = await page.evaluate(() =>
+        [...document.querySelectorAll('a[href*="seat-layout"]')].map(a => a.href)
+      );
       const pageText = await page.innerText('body').catch(() => '');
       console.log('   seat-layout links: ' + seatLinks.length);
-      const shows = parseShows(pageText, date);
-      console.log('   parsed shows: ' + shows.length);
-      const matching = shows.filter(s => {
+
+      const textShows = parseShows(pageText, date);
+      console.log('   shows from page text: ' + textShows.length);
+
+      const matching = textShows.filter(s => {
         const mMatch = !TARGET_MOVIE   || s.movie.toLowerCase().includes(TARGET_MOVIE.toLowerCase());
         const lMatch  = !WATCH_LANGUAGE || s.language.toLowerCase().includes(WATCH_LANGUAGE);
         return mMatch && lMatch;
       });
       console.log('   matching (movie="' + TARGET_MOVIE + '" lang="' + WATCH_LANGUAGE + '"): ' + matching.length);
-      if (matching.length === 0 && seatLinks.length === 0) { await browser.close(); return { ok: true, shows: [], date }; }
+
+      // Use seat links — one per show time in order they appear on page
+      if (seatLinks.length === 0) { await browser.close(); return { ok: true, shows: [], date }; }
+
+      // ── For each seat link, open seat layout + check availability ─────────
       const results = [];
-      const linksToCheck = seatLinks.slice(0, Math.max(matching.length, seatLinks.length));
-      for (let li = 0; li < linksToCheck.length; li++) {
-        const seatUrl = linksToCheck[li];
-        const show = matching[li] || matching[0] || { movie: TARGET_MOVIE, language: WATCH_LANGUAGE, time: '?', date };
+      for (let li = 0; li < seatLinks.length; li++) {
+        const seatUrl = seatLinks[li];
+        // Match show info by index if available, else unknown
+        const show = matching[li] || { movie: TARGET_MOVIE, language: WATCH_LANGUAGE || 'Tamil', time: '?', date };
         seatApiBody = null;
-        console.log('\n   [' + (li+1) + '/' + linksToCheck.length + '] ' + show.movie + ' | ' + show.language + ' | ' + show.time);
+        console.log('\n   [' + (li+1) + '/' + seatLinks.length + '] ' + show.movie + ' | ' + show.language + ' | ' + show.time);
+
         try { await page.goto(seatUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); await page.waitForTimeout(rand(3000, 5000)); }
         catch (e) { console.log('   seat page error: ' + e.message); continue; }
+
+        // Also try cinema API from seat page
+        if (cinemaApiBody) {
+          const sessions = parseSessions(cinemaApiBody, date);
+          console.log('   sessions from cinema API: ' + sessions.length);
+          if (sessions.length > 0 && li < sessions.length) {
+            const sess = sessions[li];
+            show.movie    = sess.movie    || show.movie;
+            show.language = sess.language || show.language;
+            show.time     = sess.time     || show.time;
+          }
+        }
+
         if (!seatApiBody) { console.log('   select-seat API not captured'); continue; }
         const seatData = parseSeatApiBody(seatApiBody);
         if (!seatData) { console.log('   could not parse seat data'); continue; }
         const analysis = analyseSeatLayout(seatData, NUM_TICKETS, PREFERRED_AREA || null);
         if (!analysis.ok) { console.log('   analysis error: ' + analysis.reason); continue; }
         for (const area of analysis.areas) console.log('   ' + area.areaCode + ' Rs.' + area.areaPrice + ': ' + area.available + ' free / ' + area.total + ' total');
+
+        // Filter by movie/language using what we know
+        const movieOk = !TARGET_MOVIE   || show.movie.toLowerCase().includes(TARGET_MOVIE.toLowerCase());
+        const langOk  = !WATCH_LANGUAGE || show.language.toLowerCase().includes(WATCH_LANGUAGE);
+        if (!movieOk || !langOk) { console.log('   skipped (movie/lang mismatch)'); continue; }
+
         const prefArea = analysis.areas.find(a => !PREFERRED_AREA || a.areaCode === PREFERRED_AREA);
         const hasEnough = prefArea ? prefArea.available >= MIN_SEATS : false;
         results.push({ show, seatUrl, analysis, hasEnough, guestToken, tempTransId: analysis.tempTransId, product_id: analysis.product_id });
-        if (li < linksToCheck.length - 1) { await page.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); await page.waitForTimeout(rand(1500, 2500)); }
+
+        if (li < seatLinks.length - 1) { await page.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); await page.waitForTimeout(rand(1500, 2500)); }
       }
       await browser.close();
       return { ok: true, shows: results, date };
