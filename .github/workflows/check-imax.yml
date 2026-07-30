@@ -12,23 +12,6 @@ on:
     # The job makes exactly ONE request to BookMyShow per run.
     - cron: '2,17,32,47 * * * *'
   workflow_dispatch:
-    inputs:
-      watch_dates:
-        description: 'Pin exact dates, e.g. 2026-08-15,2026-08-22. Blank = use the weekday rule below.'
-        required: false
-        default: ''
-      weekday:
-        description: 'Weekday to watch (name or 0=Sunday..6=Saturday). Blank = repo variable WATCH_WEEKDAY, else monday.'
-        required: false
-        default: ''
-      dates:
-        description: 'How many upcoming matching dates to watch (1 = the coming one only)'
-        required: false
-        default: ''
-      fingerprint_seed:
-        description: 'Replay a specific hardware profile (seed from a run log). Blank = derive from the run id.'
-        required: false
-        default: ''
 
 permissions:
   contents: write
@@ -95,11 +78,15 @@ jobs:
           PREFERRED_AREA:  ${{ vars.PREFERRED_AREA }}
           MIN_SEATS:       ${{ vars.MIN_SEATS }}
           STOP:            ${{ vars.STOP }}
-          WATCH_DATES:     ${{ github.event.inputs.watch_dates || vars.WATCH_DATES }}
-          WATCH_WEEKDAY:   ${{ github.event.inputs.weekday    || vars.WATCH_WEEKDAY }}
-          DATES_TO_CHECK:  ${{ github.event.inputs.dates      || vars.DATES_TO_CHECK }}
+          WATCH_DATES:     ${{ vars.WATCH_DATES }}
+          WATCH_WEEKDAY:   ${{ vars.WATCH_WEEKDAY }}
+          DATES_TO_CHECK:  ${{ vars.DATES_TO_CHECK }}
+          START_TIME:      ${{ vars.START_TIME }}
+          END_TIME:        ${{ vars.END_TIME }}
+          MAX_CONCURRENCY: ${{ vars.MAX_CONCURRENCY }}
+          CONSOLIDATE_ALERTS: ${{ vars.CONSOLIDATE_ALERTS }}
           BLOCK_ALERT_THRESHOLD: '3'
-          FINGERPRINT_SEED: ${{ github.event.inputs.fingerprint_seed }}
+          FINGERPRINT_SEED: ''
           TO_EMAIL:                    ${{ secrets.TO_EMAIL }}
           EMAILJS_SERVICE_ID:          ${{ secrets.EMAILJS_SERVICE_ID }}
           EMAILJS_TEMPLATE_ID:         ${{ secrets.EMAILJS_TEMPLATE_ID }}

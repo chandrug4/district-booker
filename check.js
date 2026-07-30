@@ -20,6 +20,22 @@ const MAX_ATTEMPTS   = Number(process.env.MAX_ATTEMPTS || 3);
 const BLOCK_THRESHOLD = Number(process.env.BLOCK_ALERT_THRESHOLD || 3);
 const STATE_FILE     = 'state.json';
 const DISTRICT_TOKEN = (process.env.DISTRICT_ACCESS_TOKEN || '').trim();
+const START_TIME     = (process.env.START_TIME || '').trim();
+const END_TIME       = (process.env.END_TIME || '').trim();
+const MAX_CONCURRENCY = Number(process.env.MAX_CONCURRENCY || 3);
+const CONSOLIDATE_ALERTS = process.env.CONSOLIDATE_ALERTS === 'true';
+
+function parseConfigTime(tstr) {
+  if (!tstr) return null;
+  const m = tstr.match(/(\d+):(\d+)\s*(AM|PM)?/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  if (m[3]) {
+    if (m[3].toUpperCase() === 'PM' && h < 12) h += 12;
+    if (m[3].toUpperCase() === 'AM' && h === 12) h = 0;
+  }
+  return h * 60 + parseInt(m[2], 10);
+}
 
 const FINGERPRINT_SEED = process.env.FINGERPRINT_SEED || (process.env.GITHUB_RUN_ID ? process.env.GITHUB_RUN_ID + '-' + (process.env.GITHUB_RUN_ATTEMPT||1) : null) || Date.now() + '-' + Math.random().toString(36).slice(2);
 const WEEKDAY_NAMES = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
@@ -180,8 +196,6 @@ async function checkDate(date) {
 
       console.log('   listing loaded (' + status + ', ' + html.length + ' B)');
 
-      // District uses JS router — most shows don't have <a href>, only role=button li elements.
-      // We click each bookable show and capture the navigation URL.
       const showBlocks = await page.evaluate(() => {
         const lis = [...document.querySelectorAll('li[class*="timeblock"][role="button"]')];
         return lis.map((li, idx) => {
@@ -189,54 +203,108 @@ async function checkDate(date) {
           const timeDiv = li.querySelector('[class*="__time"]');
           const timeText = (timeDiv ? timeDiv.firstChild?.textContent?.trim() : '') || li.textContent?.trim().substring(0,8);
           const noTicket = li.textContent?.includes('No tickets');
-          return { idx, timeText: (timeText||'').trim().substring(0,10), noTicket, directHref: anchor?.href || '' };
+          
+          let parentMovieDiv = li.closest('li[class*="__movieSessions"]') || li.closest('div[class*="movie-card"]');
+          if (!parentMovieDiv) {
+            let p = li.parentElement;
+            while(p && p.tagName !== 'BODY') {
+              if (p.className && typeof p.className === 'string' && (p.className.includes('movieSessions') || p.className.includes('movie-card'))) {
+                parentMovieDiv = p; break;
+              }
+              p = p.parentElement;
+            }
+          }
+          
+          let movieTitle = '';
+          let movieLang = '';
+          if (parentMovieDiv) {
+            const textLines = parentMovieDiv.innerText.split('\n').map(l => l.trim()).filter(Boolean);
+            if (textLines.length > 0) movieTitle = textLines[0];
+            const langMatch = parentMovieDiv.innerText.match(/(Tamil|Hindi|English|Telugu|Malayalam|Kannada)/i);
+            if (langMatch) movieLang = langMatch[1];
+          }
+
+          return { idx, timeText: (timeText||'').trim().substring(0,10), noTicket, directHref: anchor?.href || '', movieTitle, movieLang };
         }).filter(s => /\d{1,2}:\d{2}/.test(s.timeText || ''));
       });
 
-      console.log('   show blocks: ' + showBlocks.length);
-      const bookable = showBlocks.filter(s => !s.noTicket);
-      console.log('   bookable: ' + bookable.length);
-
-      if (bookable.length === 0) { await browser.close(); return { ok: true, shows: [], date }; }
-
-      const results = [];
-      for (let bi = 0; bi < bookable.length; bi++) {
-        const block = bookable[bi];
-        let seatUrl = block.directHref;
-        seatApiBody = null; // reset BEFORE click/navigation so we don't miss the API call
-        if (!seatUrl) {
-          await page.evaluate(idx => {
-            const lis = [...document.querySelectorAll('li[class*="timeblock"][role="button"]')];
-            if (lis[idx]) lis[idx].click();
-          }, block.idx);
-          try { await page.waitForURL('**/seat-layout/**', { timeout: 8000 }); seatUrl = page.url(); }
-          catch { console.log('   ' + block.timeText + ' - no nav, skip'); await page.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); await page.waitForTimeout(rand(1000,1500)); continue; }
-        }
-        console.log('\n   [' + (bi+1) + '/' + bookable.length + '] ' + block.timeText + ' -> ' + seatUrl.substring(0,80));
-        if (page.url() !== seatUrl) {
-          try { await page.goto(seatUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); } catch (e) { console.log('   nav error: ' + e.message); }
-        }
-        await page.waitForTimeout(rand(3000, 5000));
-        const seatText = await page.innerText('body').catch(() => '');
-        const langM = seatText.match(/(Tamil|Hindi|English|Telugu|Malayalam)/i);
-        const movieM = seatText.match(/^([^\n]+)\n\d+ \w+,/m);
-        const show = { movie: movieM ? movieM[1].trim() : TARGET_MOVIE, language: langM ? langM[1] : (WATCH_LANGUAGE||'Tamil'), time: block.timeText, date };
-        const mOk = !TARGET_MOVIE   || show.movie.toLowerCase().includes(TARGET_MOVIE.toLowerCase());
-        const lOk = !WATCH_LANGUAGE || show.language.toLowerCase().includes(WATCH_LANGUAGE);
-        if (!mOk || !lOk) { console.log('   skip - ' + show.movie + '/' + show.language); await page.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); await page.waitForTimeout(rand(1000,1500)); continue; }
-        if (!seatApiBody) { console.log('   select-seat not captured'); }
-        else {
-          const sd = parseSeatApiBody(seatApiBody);
-          if (sd) {
-            const analysis = analyseSeatLayout(sd, NUM_TICKETS, PREFERRED_AREA||null);
-            if (analysis.ok) {
-              for (const area of analysis.areas) console.log('   ' + area.areaCode + ' Rs.' + area.areaPrice + ': ' + area.available + ' free / ' + area.total + ' total');
-              const pa = analysis.areas.find(a => !PREFERRED_AREA || a.areaCode === PREFERRED_AREA);
-              results.push({ show, seatUrl, analysis, hasEnough: pa ? pa.available >= MIN_SEATS : false, guestToken, tempTransId: analysis.tempTransId, product_id: analysis.product_id });
-            }
+      console.log('   show blocks on page: ' + showBlocks.length);
+      
+      const startMin = parseConfigTime(START_TIME);
+      const endMin = parseConfigTime(END_TIME);
+      
+      const validShows = showBlocks.filter(s => {
+        if (s.noTicket) return false;
+        if (TARGET_MOVIE && !s.movieTitle.toLowerCase().includes(TARGET_MOVIE.toLowerCase())) return false;
+        if (WATCH_LANGUAGE && !s.movieLang.toLowerCase().includes(WATCH_LANGUAGE.toLowerCase())) return false;
+        if (startMin !== null || endMin !== null) {
+          const showMin = parseConfigTime(s.timeText);
+          if (showMin !== null) {
+             if (startMin !== null && showMin < startMin) return false;
+             if (endMin !== null && showMin > endMin) return false;
           }
         }
-        if (bi < bookable.length - 1) { await page.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); await page.waitForTimeout(rand(1500, 2000)); }
+        return true;
+      });
+
+      console.log('   valid matching shows: ' + validShows.length);
+      if (validShows.length === 0) { await browser.close(); return { ok: true, shows: [], date }; }
+
+      const results = [];
+      
+      for (let i = 0; i < validShows.length; i += MAX_CONCURRENCY) {
+        const batch = validShows.slice(i, i + MAX_CONCURRENCY);
+        const batchPromises = batch.map(async (block, bIdx) => {
+          const globalIdx = i + bIdx + 1;
+          const seatPage = await ctx.newPage();
+          
+          let seatApiBody = null, guestToken = null;
+          await seatPage.route('**/*', async route => {
+            try {
+              const req = route.request();
+              const resp = await route.fetch();
+              let body = ''; try { body = await resp.text(); } catch {}
+              if (req.url().includes('/gw/consumer/movies/v1/select-seat')) { seatApiBody = body; guestToken = req.headers()['x-guest-token'] || null; }
+              await route.fulfill({ response: resp, body });
+            } catch { }
+          });
+          
+          try {
+            await seatPage.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await seatPage.waitForTimeout(rand(1000, 2000));
+            await seatPage.evaluate(idx => {
+              const lis = [...document.querySelectorAll('li[class*="timeblock"][role="button"]')];
+              if (lis[idx]) lis[idx].click();
+            }, block.idx);
+            
+            try { await seatPage.waitForURL('**/seat-layout/**', { timeout: 8000 }); } catch {}
+            await seatPage.waitForTimeout(rand(3000, 5000));
+            const seatUrl = seatPage.url();
+            
+            let resultObj = null;
+            if (!seatApiBody) { console.log('   [' + globalIdx + '] ' + block.timeText + ' select-seat not captured'); }
+            else {
+              const sd = parseSeatApiBody(seatApiBody);
+              if (sd) {
+                const analysis = analyseSeatLayout(sd, NUM_TICKETS, PREFERRED_AREA||null);
+                if (analysis.ok) {
+                  const pa = analysis.areas.find(a => !PREFERRED_AREA || a.areaCode === PREFERRED_AREA);
+                  console.log('   [' + globalIdx + '] ' + block.timeText + ' - ' + (pa ? pa.available : 0) + ' free seats in ' + (PREFERRED_AREA||'any'));
+                  resultObj = { show: { movie: block.movieTitle, language: block.movieLang, time: block.timeText, date }, seatUrl, analysis, hasEnough: pa ? pa.available >= MIN_SEATS : false, guestToken, tempTransId: analysis.tempTransId, product_id: analysis.product_id };
+                }
+              }
+            }
+            await seatPage.close();
+            return resultObj;
+          } catch (e) {
+            console.log('   [' + globalIdx + '] ' + block.timeText + ' error: ' + e.message);
+            await seatPage.close().catch(()=>{});
+            return null;
+          }
+        });
+        
+        const batchResults = await Promise.all(batchPromises);
+        results.push(...batchResults.filter(Boolean));
       }
 
       await browser.close();
@@ -275,8 +343,11 @@ async function main() {
       }
       saveState(state); process.exit(2);
     }
-    if (state.consecutiveBlocks > 0) console.log('\nRecovered - page readable again.');
+    if (state.consecutiveBlocks > 0) console.log('\\nRecovered - page readable again.');
     state.consecutiveBlocks = 0; state.blockAlertSent = false;
+    
+    let digestShows = [];
+    
     for (const r of result.shows) {
       const { show, seatUrl, analysis, hasEnough, guestToken, tempTransId, product_id } = r;
       const key = date + '|' + show.movie + '|' + show.language + '|' + show.time;
@@ -286,13 +357,14 @@ async function main() {
         continue;
       }
       if (state.notified[key]) { console.log(show.time + ' - already notified'); continue; }
+      
       const dateLabel = new Date(date + 'T00:00:00Z').toLocaleDateString('en-IN', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-      const areaLines = analysis.areas.map(a => '  ' + (a.areaDesc||a.areaCode) + ' (Rs.' + a.areaPrice + '): ' + a.available + ' seats free / ' + a.total + ' total').join('\n');
+      const areaLines = analysis.areas.map(a => '  ' + (a.areaDesc||a.areaCode) + ' (Rs.' + a.areaPrice + '): ' + a.available + ' seats free / ' + a.total + ' total').join('\\n');
       const sg = analysis.suggestion;
-      const suggestLine = sg ? '\nBest ' + NUM_TICKETS + ' seats: ' + sg.label + (sg.hasBest ? ' (Best Seats)' : '') + ' - Rs.' + sg.total : '';
+      const suggestLine = sg ? '\\nBest ' + NUM_TICKETS + ' seats: ' + sg.label + (sg.hasBest ? ' (Best Seats)' : '') + ' - Rs.' + sg.total : '';
       let paymentUrl = null;
       if (DISTRICT_TOKEN && sg) {
-        console.log('\nAuto-hold: ' + sg.label + '...');
+        console.log('\\nAuto-hold: ' + sg.label + '...');
         const hb = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
         const hc = await hb.newContext({ userAgent: windowsUserAgent('131') });
         const hp = await hc.newPage();
@@ -304,15 +376,30 @@ async function main() {
         if (paymentUrl) console.log('   payment URL obtained!');
         else console.log('   auto-hold failed - notify-only email');
       }
+      
+      state.notified[key] = new Date().toISOString();
       const subject = 'SEATS OPEN: ' + show.movie + ' | ' + show.language + ' | ' + show.time + ' - PVR Pondy';
       let body = show.movie + ' (' + show.language + ')\n' + dateLabel + ' | ' + show.time + '\nPVR Providence Mall, Pondicherry\n\n';
       body += 'Availability:\n' + areaLines + suggestLine + '\n\n';
       if (paymentUrl) body += 'Seats auto-selected!\nPAY NOW: ' + paymentUrl + '\n(Link valid ~5 minutes)\n\n';
       else body += 'Book now: ' + seatUrl + '\n\n';
       body += 'Checked: ' + new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-      console.log('\nALERT: seats available for ' + show.time + ' - emailing');
-      try { await sendEmail(process.env.EMAILJS_TEMPLATE_ID, subject, body); state.notified[key] = new Date().toISOString(); console.log('   email sent'); }
-      catch (e) { console.error('   email error:', e.message); }
+      
+      if (CONSOLIDATE_ALERTS) {
+        digestShows.push({ subject, body, time: show.time });
+      } else {
+        console.log('\nALERT: seats available for ' + show.time + ' - emailing');
+        try { await sendEmail(process.env.EMAILJS_TEMPLATE_ID, subject, body); console.log('   email sent'); }
+        catch (e) { console.error('   email error:', e.message); }
+      }
+    }
+    
+    if (CONSOLIDATE_ALERTS && digestShows.length > 0) {
+       console.log('\nALERT: sending consolidated email for ' + digestShows.length + ' shows');
+       const digestSubject = 'SEATS OPEN: ' + digestShows.length + ' shows for ' + TARGET_MOVIE + ' - PVR Pondy';
+       const digestBody = digestShows.map(d => d.body).join('\n-----------------------------------\n\n');
+       try { await sendEmail(process.env.EMAILJS_TEMPLATE_ID, digestSubject, digestBody); console.log('   email sent'); }
+       catch (e) { console.error('   email error:', e.message); }
     }
   }
   saveState(state);
