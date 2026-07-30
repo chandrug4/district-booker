@@ -95,7 +95,6 @@ jobs:
           DISTRICT_COOKIES:            ${{ secrets.DISTRICT_COOKIES }}
           DISTRICT_ACCESS_TOKEN:      ${{ secrets.DISTRICT_ACCESS_TOKEN }}
           PROXY_URL:             ${{ secrets.PROXY_URL }}
-          DISTRICT_ACCESS_TOKEN: ${{ secrets.DISTRICT_ACCESS_TOKEN }}
         run: node check.js
 
       # Screenshot + HTML of whatever BookMyShow returned when it blocked us.
