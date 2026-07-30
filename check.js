@@ -319,9 +319,32 @@ async function checkDate(date) {
           let movieTitle = '';
           let movieLang = '';
           if (parentMovieDiv) {
-            const textLines = parentMovieDiv.innerText.split('\n').map(l => l.trim()).filter(Boolean);
-            if (textLines.length > 0) movieTitle = textLines[0];
-            movieLang = parentMovieDiv.innerText;
+            const titleEl = parentMovieDiv.querySelector('[class*="movieDetailsDivHeading"], h3, h2, h4');
+            if (titleEl) movieTitle = titleEl.innerText?.trim();
+            else {
+              const textLines = parentMovieDiv.innerText.split('\n').map(l => l.trim()).filter(Boolean);
+              if (textLines.length > 0) movieTitle = textLines[0];
+            }
+
+            let curr = li;
+            while (curr && curr !== parentMovieDiv) {
+              let prev = curr.previousElementSibling;
+              while (prev) {
+                if (prev.className && typeof prev.className === 'string' && prev.className.includes('languageLabelHeading')) {
+                  movieLang = prev.innerText?.trim();
+                  break;
+                }
+                const subLang = prev.querySelector ? prev.querySelector('[class*="languageLabelHeading"]') : null;
+                if (subLang) {
+                  movieLang = subLang.innerText?.trim();
+                  break;
+                }
+                prev = prev.previousElementSibling;
+              }
+              if (movieLang) break;
+              curr = curr.parentElement;
+            }
+            if (!movieLang) movieLang = parentMovieDiv.innerText;
           }
 
           return { idx, timeText: (timeText||'').trim().substring(0,10), noTicket, directHref: anchor?.href || '', movieTitle, movieLang };
