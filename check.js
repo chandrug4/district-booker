@@ -107,6 +107,7 @@ function parseSessions(cinemaApiBody, date) {
     };
     walk(data);
     return sessions;
+  } catch { return []; }
 }
 function parseShows(text, date) {
   const shows = [];
