@@ -77,23 +77,73 @@ async function launchBrowser(profile) {
   catch  { const b = await chromium.launch(opts); console.log('   Chromium ' + b.version()); return b; }
 }
 
-async function holdSeats(page, tempTransId, product_id, seats, guestToken) {
-  if (!DISTRICT_TOKEN) return null;
+async function holdSeats(browser, seatUrl, numTickets, preferredArea, token, guestToken) {
+  if (!token) return null;
   try {
-    const result = await page.evaluate(async ({ transId, pid, seats, token, guest }) => {
-      const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json, text/plain, */*', 'x-app-type': 'ed_web', 'x-client-id': 'district-web', 'x-app-version': '11.11.1', 'x-access-token': token, 'Cookie': 'x-access-token=' + token };
-      if (guest) headers['x-guest-token'] = guest;
-      const res = await fetch('https://www.district.in/gw/consumer/movies/v1/checkout?version=3&site_id=1&channel=web&child_site_id=1&platform=district',
-        { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ tempTransId: transId, product_id: pid, seats }) });
-      return { status: res.status, body: await res.text() };
-    }, { transId: tempTransId, pid: product_id, seats, token: DISTRICT_TOKEN, guest: guestToken });
-    if (result.status === 200) {
-      const data = JSON.parse(result.body);
-      return data.paymentUrl || data.redirectUrl || data.checkout_url || data.url || null;
+    const context = await browser.newContext({
+      userAgent: windowsUserAgent('131'),
+      viewport: { width: 1920, height: 1080 },
+      geolocation: { latitude: 11.9416, longitude: 79.8083 },
+      permissions: ['geolocation']
+    });
+
+    await context.addCookies([
+      { name: 'x-access-token', value: token, domain: '.district.in', path: '/' }
+    ]);
+
+    const page = await context.newPage();
+    console.log('   [Auto-Hold UI] Opening seat layout page...');
+    await page.goto(seatUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(3000);
+
+    // STEP 1: Dismiss promotional modal if present
+    const closeIcon = page.locator('[data-testid="close-icon"]');
+    if (await closeIcon.isVisible().catch(() => false)) {
+      console.log('   [Auto-Hold UI] Dismissing modal...');
+      await closeIcon.click();
+      await page.waitForTimeout(1000);
     }
-    console.log('   checkout HTTP ' + result.status + ' - ' + result.body.substring(0, 120));
-  } catch (e) { console.log('   checkout error: ' + e.message); }
-  return null;
+
+    // STEP 2: Select available seats
+    const areaFilter = preferredArea ? `[aria-label*="${preferredArea}"]` : '';
+    const selector = `span[aria-label*="available"][aria-label*="seat"]:not([aria-label*="unavailable"])${areaFilter}`;
+    const availableSeats = page.locator(selector);
+    const count = await availableSeats.count();
+
+    if (count >= numTickets) {
+      console.log(`   [Auto-Hold UI] Selecting ${numTickets} seats...`);
+      for (let i = 0; i < numTickets; i++) {
+        await availableSeats.nth(i).click();
+        await page.waitForTimeout(400);
+      }
+      await page.waitForTimeout(1500);
+
+      // STEP 3: Click Proceed button
+      const proceedBtn = page.locator('button, div[role="button"]').filter({ hasText: /^Proceed$/i }).first();
+      if (await proceedBtn.isVisible().catch(() => false)) {
+        console.log('   [Auto-Hold UI] Clicking Proceed button...');
+        await proceedBtn.click();
+        await page.waitForTimeout(4000);
+
+        // STEP 4: Handle F&B Skip modal if present
+        const skipBtn = page.locator('button, [role="button"], span').filter({ hasText: /Skip|Continue without/i }).first();
+        if (await skipBtn.isVisible().catch(() => false)) {
+          console.log('   [Auto-Hold UI] Skipping F&B modal...');
+          await skipBtn.click();
+          await page.waitForTimeout(3000);
+        }
+
+        const heldUrl = page.url();
+        await context.close();
+        return heldUrl;
+      }
+    }
+    await context.close();
+    return null;
+  } catch (e) {
+    console.log('   [Auto-Hold UI] Error: ' + e.message);
+    return null;
+  }
 }
 
 function parseSessions(cinemaApiBody, date) {
@@ -363,17 +413,11 @@ async function main() {
       const sg = analysis.suggestion;
       const suggestLine = sg ? '\\nBest ' + NUM_TICKETS + ' seats: ' + sg.label + (sg.hasBest ? ' (Best Seats)' : '') + ' - Rs.' + sg.total : '';
       let paymentUrl = null;
-      if (DISTRICT_TOKEN && sg) {
-        console.log('\\nAuto-hold: ' + sg.label + '...');
-        const hb = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
-        const hc = await hb.newContext({ userAgent: windowsUserAgent('131') });
-        await hc.addCookies([{ name: 'x-access-token', value: DISTRICT_TOKEN, domain: '.district.in', path: '/' }]);
-        const hp = await hc.newPage();
-        await hp.goto(seatUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await hp.waitForTimeout(3000);
-        const seatPayload = sg.seats.map(s => ({ areaNum: s.areaNum, areaCode: s.areaCode, gridRowId: s.gridRowId, gridSeatNum: s.gridSeatNum, seatNumber: s.seatNumber }));
-        paymentUrl = await holdSeats(hp, tempTransId, product_id, seatPayload, guestToken);
-        await hb.close();
+      if (DISTRICT_TOKEN) {
+        console.log('\n[Auto-Hold UI] Attempting Playwright UI seat reservation for ' + show.time + '...');
+        const hb = await launchBrowser({ chromeVersion: '131' });
+        paymentUrl = await holdSeats(hb, seatUrl, NUM_TICKETS, PREFERRED_AREA, DISTRICT_TOKEN, guestToken);
+        await hb.close().catch(() => {});
         if (paymentUrl) console.log('   payment URL obtained!');
         else console.log('   auto-hold failed - notify-only email');
       }
