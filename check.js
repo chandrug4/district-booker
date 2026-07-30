@@ -78,7 +78,8 @@ async function launchBrowser(profile) {
 }
 
 async function holdSeats(browser, seatUrl, numTickets, preferredArea, token, guestToken) {
-  if (!token) return null;
+  const cookieStr = process.env.DISTRICT_COOKIES || process.env.DISTRICT_ACCESS_TOKEN || '';
+  if (!cookieStr) return null;
   try {
     const context = await browser.newContext({
       userAgent: windowsUserAgent('131'),
@@ -87,12 +88,24 @@ async function holdSeats(browser, seatUrl, numTickets, preferredArea, token, gue
       permissions: ['geolocation']
     });
 
-    await context.addCookies([
-      { name: 'x-access-token', value: token, domain: '.district.in', path: '/' }
-    ]);
+    // Parse cookies from DISTRICT_COOKIES string or use token fallback
+    const cookiesToAdd = [];
+    if (cookieStr.includes('=')) {
+      const parts = cookieStr.split(';');
+      for (const part of parts) {
+        const [k, ...v] = part.trim().split('=');
+        if (k && v.length) {
+          cookiesToAdd.push({ name: k.trim(), value: v.join('=').trim(), domain: '.district.in', path: '/' });
+        }
+      }
+    } else {
+      cookiesToAdd.push({ name: 'x-access-token', value: cookieStr, domain: '.district.in', path: '/' });
+    }
+
+    await context.addCookies(cookiesToAdd);
 
     const page = await context.newPage();
-    console.log('   [Auto-Hold UI] Opening seat layout page...');
+    console.log('   [Auto-Hold UI] Opening seat layout page as logged-in user...');
     await page.goto(seatUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(3000);
 
@@ -126,14 +139,20 @@ async function holdSeats(browser, seatUrl, numTickets, preferredArea, token, gue
         await page.waitForTimeout(4000);
 
         // STEP 4: Handle F&B Skip modal if present
-        const skipBtn = page.locator('button, [role="button"], span').filter({ hasText: /Skip|Continue without/i }).first();
-        if (await skipBtn.isVisible().catch(() => false)) {
-          console.log('   [Auto-Hold UI] Skipping F&B modal...');
-          await skipBtn.click();
-          await page.waitForTimeout(3000);
+        console.log('   [Auto-Hold UI] Skipping F&B modal...');
+        const clickedSkip = await page.evaluate(() => {
+          const all = [...document.querySelectorAll('*')];
+          const skipEl = all.find(el => el.children.length === 0 && el.innerText && el.innerText.trim() === 'Skip');
+          if (skipEl) { skipEl.click(); return true; }
+          return false;
+        });
+
+        if (clickedSkip) {
+          await page.waitForTimeout(4000);
         }
 
         const heldUrl = page.url();
+        console.log('   [Auto-Hold UI] Success! Held Order URL: ' + heldUrl);
         await context.close();
         return heldUrl;
       }
@@ -419,7 +438,7 @@ async function main() {
         const hb = await launchBrowser(holdProfile);
         paymentUrl = await holdSeats(hb, seatUrl, NUM_TICKETS, PREFERRED_AREA, DISTRICT_TOKEN, guestToken);
         await hb.close().catch(() => {});
-        if (paymentUrl) console.log('   payment URL obtained!');
+        if (paymentUrl) console.log('   payment URL: ' + paymentUrl);
         else console.log('   auto-hold failed - notify-only email');
       }
       

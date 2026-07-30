@@ -92,7 +92,8 @@ jobs:
           EMAILJS_TEMPLATE_ID:         ${{ secrets.EMAILJS_TEMPLATE_ID }}
           EMAILJS_FAILURE_TEMPLATE_ID: ${{ secrets.EMAILJS_FAILURE_TEMPLATE_ID }}
           EMAILJS_PUBLIC_KEY:          ${{ secrets.EMAILJS_PUBLIC_KEY }}
-          EMAILJS_PRIVATE_KEY:         ${{ secrets.EMAILJS_PRIVATE_KEY }}
+          DISTRICT_COOKIES:            ${{ secrets.DISTRICT_COOKIES }}
+          DISTRICT_ACCESS_TOKEN:      ${{ secrets.DISTRICT_ACCESS_TOKEN }}
           PROXY_URL:             ${{ secrets.PROXY_URL }}
           DISTRICT_ACCESS_TOKEN: ${{ secrets.DISTRICT_ACCESS_TOKEN }}
         run: node check.js
