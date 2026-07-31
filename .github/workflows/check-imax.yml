@@ -97,6 +97,14 @@ jobs:
           EMAILJS_PRIVATE_KEY:         ${{ secrets.EMAILJS_PRIVATE_KEY }}
           DISTRICT_COOKIES:            ${{ secrets.DISTRICT_COOKIES }}
           DISTRICT_ACCESS_TOKEN:      ${{ secrets.DISTRICT_ACCESS_TOKEN }}
+          TELEGRAM_BOT_TOKEN:          ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:            ${{ secrets.TELEGRAM_CHAT_ID }}
+          WHATSAPP_PHONE:              ${{ secrets.WHATSAPP_PHONE }}
+          WHATSAPP_API_KEY:            ${{ secrets.WHATSAPP_API_KEY }}
+          TWILIO_ACCOUNT_SID:          ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN:           ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_FROM_PHONE:           ${{ secrets.TWILIO_FROM_PHONE }}
+          PHONE_NUMBER:                ${{ secrets.PHONE_NUMBER }}
           PROXY_URL:             ${{ secrets.PROXY_URL }}
         run: node check.js
 

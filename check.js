@@ -83,6 +83,63 @@ async function sendEmail(templateId, subject, message) {
   if (!res.ok) throw new Error('EmailJS ' + res.status + ': ' + await res.text());
 }
 
+async function sendTelegramAlert(message) {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!botToken || !chatId) return;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: message })
+    });
+    if (res.ok) console.log('   📱 Telegram alert sent to phone!');
+  } catch (err) {
+    console.error('   Telegram alert error:', err.message);
+  }
+}
+
+async function sendWhatsAppAlert(message) {
+  const phone = process.env.WHATSAPP_PHONE;
+  const apiKey = process.env.WHATSAPP_API_KEY;
+  if (!phone || !apiKey) return;
+  try {
+    const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}&apikey=${encodeURIComponent(apiKey)}`;
+    const res = await fetch(url);
+    if (res.ok) console.log('   💬 WhatsApp alert sent to phone!');
+  } catch (err) {
+    console.error('   WhatsApp alert error:', err.message);
+  }
+}
+
+async function sendTwilioPhoneCall() {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const fromPhone = process.env.TWILIO_FROM_PHONE;
+  const toPhone = process.env.PHONE_NUMBER || process.env.WHATSAPP_PHONE;
+  if (!accountSid || !authToken || !fromPhone || !toPhone) return;
+  try {
+    const auth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+    const twiml = '<Response><Say voice="alice" loop="2">Alert! Your PVR movie tickets have been auto held! Check your WhatsApp and email for the payment link!</Say></Response>';
+    const body = new URLSearchParams({
+      To: toPhone,
+      From: fromPhone,
+      Twiml: twiml
+    });
+    const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Calls.json`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${auth}`,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: body.toString()
+    });
+    if (res.ok) console.log('   📞 Phone call alert triggered to your phone!');
+  } catch (err) {
+    console.error('   Twilio phone call error:', err.message);
+  }
+}
+
 async function launchBrowser(profile) {
   const opts = { headless: true, args: launchArgs(profile), ...(PROXY_URL ? { proxy: { server: PROXY_URL } } : {}) };
   try { const b = await chromium.launch({ ...opts, channel: 'chrome' }); console.log('   Chrome ' + b.version()); return b; }
@@ -529,6 +586,9 @@ async function main() {
         console.log('\nALERT: seats available for ' + show.time + ' - emailing');
         try { await sendEmail(process.env.EMAILJS_TEMPLATE_ID, subject, body); console.log('   email sent'); }
         catch (e) { console.error('   email error:', e.message); }
+        await sendTelegramAlert(`🚨 ${subject}\n\n${body}`);
+        await sendWhatsAppAlert(`🚨 ${subject}\n\n${body}`);
+        await sendTwilioPhoneCall();
       }
     }
     
@@ -538,6 +598,9 @@ async function main() {
        const digestBody = digestShows.map(d => d.body).join('\n-----------------------------------\n\n');
        try { await sendEmail(process.env.EMAILJS_TEMPLATE_ID, digestSubject, digestBody); console.log('   email sent'); }
        catch (e) { console.error('   email error:', e.message); }
+       await sendTelegramAlert(`🚨 ${digestSubject}\n\n${digestBody}`);
+       await sendWhatsAppAlert(`🚨 ${digestSubject}\n\n${digestBody}`);
+       await sendTwilioPhoneCall();
     }
   }
   saveState(state);
