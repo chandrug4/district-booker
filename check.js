@@ -589,6 +589,9 @@ async function main() {
         await sendTelegramAlert(`🚨 ${subject}\n\n${body}`);
         await sendWhatsAppAlert(`🚨 ${subject}\n\n${body}`);
         await sendTwilioPhoneCall();
+        if (process.env.GITHUB_STEP_SUMMARY) {
+          try { fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### 🚨 ${subject}\n\n${body}\n\n---\n`); } catch {}
+        }
       }
     }
     
@@ -601,6 +604,9 @@ async function main() {
        await sendTelegramAlert(`🚨 ${digestSubject}\n\n${digestBody}`);
        await sendWhatsAppAlert(`🚨 ${digestSubject}\n\n${digestBody}`);
        await sendTwilioPhoneCall();
+       if (process.env.GITHUB_STEP_SUMMARY) {
+         try { fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### 🚨 ${digestSubject}\n\n${digestBody}\n\n---\n`); } catch {}
+       }
     }
   }
   saveState(state);
