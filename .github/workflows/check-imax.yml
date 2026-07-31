@@ -10,8 +10,10 @@ on:
     # dropped one costs 15 minutes instead of a full hour. Round minutes
     # (:00, :15, :30, :45) are the most contended, so they are avoided.
     # The job makes exactly ONE request to BookMyShow per run.
-    - cron: '*/5 * * * *'
+    - cron: '3,18,33,48 * * * *'
   workflow_dispatch:
+  repository_dispatch:
+    types: [check-pvr]
 
 permissions:
   contents: write
