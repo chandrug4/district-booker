@@ -358,7 +358,10 @@ async function checkDate(date) {
       
       const validShows = showBlocks.filter(s => {
         if (s.noTicket) return false;
-        if (TARGET_MOVIE && !s.movieTitle.toLowerCase().includes(TARGET_MOVIE.toLowerCase())) return false;
+        if (TARGET_MOVIE) {
+          const reqMovies = TARGET_MOVIE.split(',').map(m => m.trim().toLowerCase()).filter(Boolean);
+          if (!reqMovies.some(m => s.movieTitle.toLowerCase().includes(m))) return false;
+        }
         if (WATCH_LANGUAGE) {
           const reqLangs = WATCH_LANGUAGE.split(',').map(l => l.trim().toLowerCase()).filter(Boolean);
           if (!reqLangs.some(l => s.movieLang.toLowerCase().includes(l))) return false;
@@ -372,6 +375,15 @@ async function checkDate(date) {
         }
         return true;
       });
+
+      if (TARGET_MOVIE) {
+        const reqMovies = TARGET_MOVIE.split(',').map(m => m.trim().toLowerCase()).filter(Boolean);
+        validShows.sort((a, b) => {
+          const indexA = reqMovies.findIndex(m => a.movieTitle.toLowerCase().includes(m));
+          const indexB = reqMovies.findIndex(m => b.movieTitle.toLowerCase().includes(m));
+          return (indexA === -1 ? 99 : indexA) - (indexB === -1 ? 99 : indexB);
+        });
+      }
 
       console.log('   valid matching shows: ' + validShows.length);
       if (validShows.length === 0) { await browser.close(); return { ok: true, shows: [], date }; }
