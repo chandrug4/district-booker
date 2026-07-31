@@ -128,6 +128,9 @@ async function holdSeats(browser, seatUrl, numTickets, preferredArea, token, gue
       await page.waitForTimeout(1000);
     }
 
+    // Wait for seat layout grid elements to finish rendering
+    await page.waitForSelector('[aria-label*="available"], [class*="seat"]', { timeout: 8000 }).catch(() => {});
+
     // STEP 2: Select ADJACENT available seats
     let seatsClicked = 0;
     if (targetSeats && targetSeats.length >= numTickets) {
@@ -135,9 +138,15 @@ async function holdSeats(browser, seatUrl, numTickets, preferredArea, token, gue
       console.log(`   [Auto-Hold UI] Target adjacent seats: ${label}`);
       for (const s of targetSeats) {
         const num = s.displaySeatNumber || s.seatNumber;
-        const seatLoc = page.locator(`span[aria-label*="available"][aria-label*="row ${s.phyRowId}"][aria-label*="${num}"]`).first();
+        const selector = [
+          `[aria-label*="available"][aria-label*="row ${s.phyRowId}"][aria-label*="${num}"]`,
+          `[aria-label*="available"][aria-label*="${s.phyRowId}${num}"]`,
+          `[aria-label*="available"][aria-label*="${num}"]`
+        ].join(', ');
+        const seatLoc = page.locator(selector).first();
         if (await seatLoc.isVisible().catch(() => false)) {
-          await seatLoc.click();
+          await seatLoc.scrollIntoViewIfNeeded().catch(() => {});
+          await seatLoc.click({ force: true }).catch(() => {});
           seatsClicked++;
           await page.waitForTimeout(400);
         }
@@ -147,16 +156,24 @@ async function holdSeats(browser, seatUrl, numTickets, preferredArea, token, gue
     // Fallback if targetSeats locator didn't hit
     if (seatsClicked < numTickets) {
       console.log(`   [Auto-Hold UI] Falling back to sequential available seats...`);
-      const areaFilter = preferredArea ? `[aria-label*="${preferredArea}"]` : '';
-      const selector = `span[aria-label*="available"][aria-label*="seat"]:not([aria-label*="unavailable"])${areaFilter}`;
-      const availableSeats = page.locator(selector);
-      const count = await availableSeats.count();
-      if (count >= numTickets) {
-        for (let i = 0; i < numTickets; i++) {
-          await availableSeats.nth(i).click();
-          await page.waitForTimeout(400);
+      const seatLocators = [
+        `[aria-label*="available"][aria-label*="seat"]`,
+        `span[aria-label*="available"]`,
+        `div[aria-label*="available"]`
+      ];
+      for (const sel of seatLocators) {
+        const availableSeats = page.locator(sel);
+        const count = await availableSeats.count().catch(() => 0);
+        if (count >= numTickets) {
+          for (let i = 0; i < numTickets; i++) {
+            const el = availableSeats.nth(i);
+            await el.scrollIntoViewIfNeeded().catch(() => {});
+            await el.click({ force: true }).catch(() => {});
+            await page.waitForTimeout(400);
+          }
+          seatsClicked = numTickets;
+          break;
         }
-        seatsClicked = numTickets;
       }
     }
 
