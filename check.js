@@ -140,6 +140,48 @@ async function sendTwilioPhoneCall() {
   }
 }
 
+async function checkCookieHealth(browser) {
+  const cookieStr = process.env.DISTRICT_COOKIES || process.env.DISTRICT_ACCESS_TOKEN || '';
+  if (!cookieStr) return;
+  try {
+    const page = await browser.newPage();
+    const cookiesToAdd = [];
+    if (cookieStr.includes('=')) {
+      for (const part of cookieStr.split(';')) {
+        const [k, ...v] = part.trim().split('=');
+        if (k && v.length) {
+          const name = k.trim();
+          const value = v.join('=').trim();
+          cookiesToAdd.push({ name, value, domain: '.district.in', path: '/' });
+          cookiesToAdd.push({ name, value, domain: 'www.district.in', path: '/' });
+        }
+      }
+    }
+    await page.context().addCookies(cookiesToAdd);
+    await page.goto('https://www.district.in/profile', { waitUntil: 'domcontentloaded', timeout: 10000 });
+    await page.waitForTimeout(2500);
+
+    const currentUrl = page.url();
+    const isExpired = currentUrl === 'https://www.district.in/' || currentUrl === 'https://www.district.in';
+
+    if (isExpired) {
+      console.log('\n⚠️ COOKIE EXPIRED ALERT: District session cookie has expired (redirected to homepage)!');
+      const alertMsg = '⚠️ DISTRICT COOKIE EXPIRED: Your login session cookie on District has expired. Please copy a fresh cookie string from your browser and update DISTRICT_COOKIES in GitHub Secrets so auto-hold is 100% ready!';
+      try { await sendEmail(process.env.EMAILJS_FAILURE_TEMPLATE_ID || process.env.EMAILJS_TEMPLATE_ID, '⚠️ DISTRICT COOKIE EXPIRED', alertMsg); } catch {}
+      await sendTelegramAlert(alertMsg);
+      await sendWhatsAppAlert(alertMsg);
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        try { fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### ⚠️ DISTRICT COOKIE EXPIRED\n\n${alertMsg}\n\n---\n`); } catch {}
+      }
+    } else {
+      console.log('   [Cookie Health Check] District login session active & valid (on /profile)!');
+    }
+    await page.close().catch(() => {});
+  } catch (err) {
+    console.error('   [Cookie Health Error]', err.message);
+  }
+}
+
 async function launchBrowser(profile) {
   const opts = { headless: true, args: launchArgs(profile), ...(PROXY_URL ? { proxy: { server: PROXY_URL } } : {}) };
   try { const b = await chromium.launch({ ...opts, channel: 'chrome' }); console.log('   Chrome ' + b.version()); return b; }
@@ -163,11 +205,15 @@ async function holdSeats(browser, seatUrl, numTickets, preferredArea, token, gue
       for (const part of parts) {
         const [k, ...v] = part.trim().split('=');
         if (k && v.length) {
-          cookiesToAdd.push({ name: k.trim(), value: v.join('=').trim(), domain: '.district.in', path: '/' });
+          const name = k.trim();
+          const value = v.join('=').trim();
+          cookiesToAdd.push({ name, value, domain: '.district.in', path: '/' });
+          cookiesToAdd.push({ name, value, domain: 'www.district.in', path: '/' });
         }
       }
     } else {
       cookiesToAdd.push({ name: 'x-access-token', value: cookieStr, domain: '.district.in', path: '/' });
+      cookiesToAdd.push({ name: 'x-access-token', value: cookieStr, domain: 'www.district.in', path: '/' });
     }
 
     await context.addCookies(cookiesToAdd);
@@ -201,19 +247,55 @@ async function holdSeats(browser, seatUrl, numTickets, preferredArea, token, gue
       }
     }
 
-    // Fallback if targetSeats locator didn't hit
+    // Fallback if targetSeats locator didn't hit: strictly select side-by-side contiguous seats in the same row
     if (seatsClicked < numTickets) {
-      console.log(`   [Auto-Hold UI] Falling back to sequential available seats...`);
-      const areaFilter = preferredArea ? `[aria-label*="${preferredArea}"]` : '';
-      const selector = `span[aria-label*="available"][aria-label*="seat"]:not([aria-label*="unavailable"])${areaFilter}`;
-      const availableSeats = page.locator(selector);
-      const count = await availableSeats.count();
-      if (count >= numTickets) {
-        for (let i = 0; i < numTickets; i++) {
-          await availableSeats.nth(i).click();
-          await page.waitForTimeout(400);
+      console.log(`   [Auto-Hold UI] Searching for side-by-side contiguous seats in the same row...`);
+      const clickedContiguous = await page.evaluate(({ numTickets, preferredArea }) => {
+        const areaFilter = preferredArea ? preferredArea.toLowerCase() : '';
+        const seats = [...document.querySelectorAll('span[aria-label*="available"][aria-label*="seat"]')].filter(el => {
+          const label = (el.getAttribute('aria-label') || '').toLowerCase();
+          if (label.includes('unavailable')) return false;
+          if (areaFilter && !label.includes(areaFilter)) return false;
+          return true;
+        });
+
+        const parsed = [];
+        for (const el of seats) {
+          const label = el.getAttribute('aria-label') || '';
+          const rowMatch = label.match(/row\s+([A-Za-z0-9]+)/i);
+          const seatMatch = label.match(/seat\s+(\d+)/i);
+          if (rowMatch && seatMatch) {
+            parsed.push({ el, row: rowMatch[1].toUpperCase(), num: parseInt(seatMatch[1], 10) });
+          }
         }
+
+        const byRow = {};
+        for (const s of parsed) {
+          if (!byRow[s.row]) byRow[s.row] = [];
+          byRow[s.row].push(s);
+        }
+
+        for (const rowId of Object.keys(byRow)) {
+          const rowSeats = byRow[rowId].sort((a, b) => a.num - b.num);
+          if (rowSeats.length < numTickets) continue;
+          for (let i = 0; i <= rowSeats.length - numTickets; i++) {
+            const group = rowSeats.slice(i, i + numTickets);
+            if (group.every((s, j) => j === 0 || s.num === group[j - 1].num + 1)) {
+              for (const s of group) {
+                s.el.click();
+              }
+              return { success: true, label: group.map(s => `${s.row}${s.num}`).join(', ') };
+            }
+          }
+        }
+        return { success: false };
+      }, { numTickets, preferredArea });
+
+      if (clickedContiguous.success) {
+        console.log(`   [Auto-Hold UI] Successfully selected adjacent seats: ${clickedContiguous.label}`);
         seatsClicked = numTickets;
+      } else {
+        console.log(`   [Auto-Hold UI] No side-by-side adjacent seats available. Skipping hold to prevent split seating.`);
       }
     }
 
@@ -443,7 +525,7 @@ async function checkDate(date) {
       }
 
       console.log('   valid matching shows: ' + validShows.length);
-      if (validShows.length === 0) { await browser.close(); return { ok: true, shows: [], date }; }
+      if (validShows.length === 0) { await checkCookieHealth(browser); await browser.close(); return { ok: true, shows: [], date }; }
 
       const results = [];
       
